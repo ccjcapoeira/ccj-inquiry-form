@@ -1,0 +1,78 @@
+{
+  "base": "https://cordao.org/",
+  "form": "https://ccjcapoeira.github.io/ccj-inquiry-form/",
+  "links": {
+    "ig": {
+      "to": "base",
+      "utm_source": "instagram",
+      "utm_medium": "social",
+      "utm_campaign": "profile"
+    },
+    "ig-ad": {
+      "to": "form",
+      "utm_source": "instagram",
+      "utm_medium": "paid",
+      "utm_campaign": "ad2026-10"
+    },
+    "gbp-minoh": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "minoh"
+    },
+    "gbp-senri": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "senri"
+    },
+    "gbp-kobe": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "kobe"
+    },
+    "gbp-nishinomiya": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "nishinomiya"
+    },
+    "gbp-abeno": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "abeno"
+    },
+    "gbp-esaka": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "esaka"
+    },
+    "gbp-itami": {
+      "to": "form",
+      "utm_source": "google",
+      "utm_medium": "gbp",
+      "utm_campaign": "itami"
+    },
+    "yt": {
+      "to": "form",
+      "utm_source": "youtube",
+      "utm_medium": "social",
+      "utm_campaign": "channel"
+    },
+    "line": {
+      "to": "form",
+      "utm_source": "line",
+      "utm_medium": "referral",
+      "utm_campaign": "member-share"
+    },
+    "sample-event": {
+      "to": "form",
+      "utm_source": "event",
+      "utm_medium": "qr",
+      "utm_campaign": "sample-event"
+    }
+  }
+}

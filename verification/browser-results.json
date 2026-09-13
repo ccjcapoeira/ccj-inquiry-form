@@ -1,0 +1,40 @@
+{
+  "result": "passed",
+  "widths": [
+    {
+      "width": 320,
+      "scroll": 320,
+      "height": 1191
+    },
+    {
+      "width": 390,
+      "scroll": 390,
+      "height": 1058
+    },
+    {
+      "width": 768,
+      "scroll": 768,
+      "height": 1027
+    },
+    {
+      "width": 1280,
+      "scroll": 1280,
+      "height": 1027
+    }
+  ],
+  "checks": [
+    "必須入力",
+    "条件付き年齢・その他・紹介",
+    "確認→戻る→完了",
+    "HTML入力のテキスト表示",
+    "UTM再訪保持・キャンペーン更新",
+    "POST全26キー・no-cors",
+    "送信中ロック",
+    "通信失敗",
+    "ストレージ不可",
+    "JavaScript無効",
+    "12転送ページ",
+    "meta refresh"
+  ],
+  "externalSubmission": false
+}
