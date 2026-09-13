@@ -2,7 +2,7 @@
 
 新規の見学・体験・その他問い合わせを、1件＝Googleスプレッドシート1行として記録します。フォームは外部ライブラリ・ビルド不要のHTML/CSS/JS、受信はGoogle Apps Scriptです。本人申告の認知経路とUTM・参照元を別々に保存します。
 
-- 公開予定: https://ccjcapoeira.github.io/ccj-inquiry-form/ （この作業では未公開）
+- [公開フォーム](https://ccjcapoeira.github.io/ccj-inquiry-form/) （公開済み）
 - 既存サイト: https://cordao.org/ （変更なし）
 - 関連リポジトリ: `~/GitHub/ccj-enrollment-form` （入会フォーム。参照のみ）
 - 作業場所: `~/GitHub/ccj-inquiry-form`
@@ -10,11 +10,11 @@
 
 ## 現在のセットアップ
 
-2026-09-13、ユーザーの追加依頼によりCodexが自動設定を実施中。GitHubリポジトリ、CCJ所有の台帳、GAS配置・デプロイを作成済みです。Googleの初回権限承認後、送信先設定・公開・実動作確認を続けます。本人用の進行手順はローカルの `.local/本人が行う操作.md` に保存しています。
+2026-09-13、ユーザーの追加依頼によりCodexが自動設定を実施。Google承認、CCJ所有の台帳、GAS配置・デプロイ、送信先設定、GitHub Pages公開が完了しました。公開フォームからの実送信で台帳1行と自動返信・管理通知の2通を確認済みです。Goopeへの案内リンクはログイン待ちです。本人用の進行手順はローカルの `.local/本人が行う操作.md` に保存しています。
 
 ## 最初に行うこと（別環境の新規設定用）
 
-[セットアップ手順](docs/セットアップ手順.md)に従い、スプレッドシートを作成→GASを貼付→`setupInquiry` を実行→ウェブアプリをデプロイ→`index.html` の **`const SCRIPT_URL = '';`** に新しい `/exec` URLを設定→GitHubへpushしてPagesを公開します。Goopeのリンク設置・実送信確認も本人が行います。
+[セットアップ手順](docs/セットアップ手順.md)に従い、スプレッドシートを作成→GASを貼付→`setupInquiry` を実行→ウェブアプリをデプロイ→`index.html` の **`const SCRIPT_URL = '';`** に新しい `/exec` URLを設定→GitHubへpushしてPagesを公開します。Goopeのリンク設置・実送信確認まで行います。
 
 URL空欄では送信をスキップするプレビューです。画面にその旨を表示し、個人情報をコンソールには出しません。確認画面で送信すると完了画面まで試せます。`no-cors` のため実運用でも完了画面だけではGAS保存成功を確認できず、台帳・メールで確認が必要です。
 
@@ -106,10 +106,12 @@ node verification/gas-test.cjs
 python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-ブラウザで `http://127.0.0.1:8765/` を開きます。UTM保持の確認は `?utm_source=test&utm_medium=qr&utm_campaign=x` を付けて開き、その後クエリを消して開き直します。保存される値は開発者ツールのlocalStorageから確認できます。
+現在の `index.html` は本番のGASへ送信します。送信を伴うローカル検証には、送信先を空にしたコピー、または下記の模擬送信による回帰検証を使ってください。ブラウザで `http://127.0.0.1:8765/` を開きます。UTM保持の確認は `?utm_source=test&utm_medium=qr&utm_campaign=x` を付けて開き、その後クエリを消して開き直します。保存される値は開発者ツールのlocalStorageから確認できます。
 
-ブラウザ回帰検証は開発環境側のPlaywrightを使った `verification/browser-test.cjs` です。フォーム本体の依存ではありません。実行方法と結果は [検証記録](verification/結果.md) に記載します。GAS固有APIはローカルの模擬APIで検証し、本番の実送信はセットアップ後に行います。
+ブラウザ回帰検証は開発環境側のPlaywrightを使った `verification/browser-test.cjs` です。フォーム本体の依存ではありません。実行方法と結果は [検証記録](verification/結果.md) に記載します。GAS固有APIはローカルの模擬APIで検証し、本番の実送信も確認済みです。回帰検証スクリプトは本番URLを空欄に置換したHTMLを配信し、外部へ実送信しません。
 
 ## 更新履歴
 
 - 2026-09-13: 問い合わせフォーム・32列台帳GAS・12件のQR転送ページ・4種の手順書を新規作成。ローカル検証を実施。公開・GASデプロイ・メール実送信は未実施。
+
+- 2026-09-13（公開工程）: 追加依頼に基づきGASとGitHub Pagesを公開。台帳保存・UTM・2通のメール受信を確認。検証行に集計除外メモを記入。
