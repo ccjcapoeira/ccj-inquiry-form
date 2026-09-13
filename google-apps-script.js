@@ -22,7 +22,10 @@ function setupInquiry() {
   MailApp.getRemainingDailyQuota();
   console.log('問い合わせ台帳の準備が完了しました。');
 }
-function doGet() { return json_({result:'ready',message:'CCJ 問い合わせAPI'}); }
+function doGet() {
+  var configured = Boolean(PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID'));
+  return json_({result:configured ? 'ready' : 'setup_required',message:'CCJ 問い合わせAPI'});
+}
 function doPost(e) {
   try {
     if (!e || !e.postData || e.postData.contents.length > 40000) throw new Error('送信データが不正です。');
