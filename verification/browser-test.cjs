@@ -24,7 +24,7 @@ const root=path.resolve(__dirname,'..'), base='http://127.0.0.1:8765/';
  // 別キャンペーンで欠けたUTMを古い値と混ぜない。
  await page.goto(base+'?utm_source=instagram');payload=await page.evaluate(()=>collectPayload());assert.equal(payload.utm_source,'instagram');assert.equal(payload.utm_campaign,'');assert(payload.firstLandingPage.includes('utm_source=test'));
  await page.goto(base+'?utm_source=test&utm_medium=qr&utm_campaign=x');
- const fill=async target=>{await target.locator('#name').fill('動作確認');await target.locator('#email').fill('test@example.invalid');await target.locator('[name=classType][value=kids]').check();await target.locator('#dojo').selectOption('箕面');await target.locator('[name=requestType][value=trial]').check();await target.locator('#firstTouch').selectOption('google_search');await target.locator('#privacyAgree').check();};
+ const fill=async target=>{await target.locator('#name').fill('動作確認');await target.locator('#email').fill('test@example.invalid');await target.locator('#tel').fill('001234');await target.locator('[name=classType][value=kids]').check();await target.locator('#dojo').selectOption('箕面');await target.locator('[name=requestType][value=trial]').check();await target.locator('#firstTouch').selectOption('google_search');await target.locator('#privacyAgree').check();};
  await fill(page);await page.locator('#review').click();assert(await page.locator('#entry').isVisible());await page.locator('#childAge').fill('0');
  // 実際の入力には個人情報を使わず、画面・確認表示を検証する。
  await page.locator('summary').click();await page.locator('#message').fill('<img src=x onerror=alert(1)>');await page.locator('[name="preContact[]"]').first().check();

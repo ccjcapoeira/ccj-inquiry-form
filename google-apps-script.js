@@ -61,6 +61,7 @@ function validate_(raw) {
     utm_source:1000,utm_medium:1000,utm_campaign:1000,utm_content:1000,utm_term:1000,firstLandingPage:4000,firstReferrer:4000,currentReferrer:4000,submitPage:4000,userAgent:2000,deviceType:20,submittedAt:40};
   Object.keys(limits).forEach(function(key) { clean[key] = text_(p[key],limits[key]); });
   if (!clean.name || /[\r\n]/.test(clean.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean.email)) throw new Error('お名前・メールを確認してください。');
+  if (!clean.tel) throw new Error('電話番号を入力してください。');
   clean.classLabel = label_(CLASS_LABELS_, p.classType);
   clean.requestLabel = label_(REQUEST_LABELS_, p.requestType);
   clean.firstTouchLabel = label_(FIRST_TOUCH_LABELS_, p.firstTouch);
