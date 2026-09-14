@@ -21,7 +21,7 @@ const context={console:{log(){}},PropertiesService:{getScriptProperties:()=>({ge
 vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../google-apps-script.js'),'utf8'),context);
 const p={name:'動作確認',email:'test@example.invalid',tel:'001234',classType:'kids',dojo:'箕面',requestType:'trial',childAge:'0',firstTouch:'referral_member',firstTouchOther:'消える値',referrerName:'紹介欄の動作確認',preContact:['Google検索','Instagram'],searchWords:'=1+1',message:'<b>入力確認</b>',privacyAgree:true,utm_source:'test',utm_medium:'qr',utm_campaign:'x',utm_content:'',utm_term:'',firstLandingPage:'https://example.invalid/?utm_source=test',firstReferrer:'',currentReferrer:'',submitPage:'https://example.invalid/',userAgent:'検証用',deviceType:'mobile',submittedAt:'2026-09-13T03:00:00.000Z'};
 const post=payload=>context.doPost({postData:{contents:JSON.stringify({formType:'inquiry',payload})}});
-assert.equal(post(p).result,'error');context.setupInquiry();assert.equal(columns,32);assert.equal(rows.length,1);assert.equal(validations[0].c,26);
+assert.equal(post(p).result,'error');assert.equal(mails.length,1);assert(mails[0].body.includes(p.email));assert(mails[0].body.includes(p.tel));mails=[];context.setupInquiry();assert.equal(columns,32);assert.equal(rows.length,1);assert.equal(validations[0].c,26);
 let result=post(p);assert.equal(result.result,'success');assert.equal(result.id,'INQ-20260913-001');assert.equal(rows.length,2);assert.equal(rows[1].length,32);assert.equal(rows[1][5],'キッズ');assert.equal(rows[1][7],'体験');assert.equal(rows[1][8],'0');assert.equal(rows[1][9],'通っている生徒・保護者からの紹介');assert.equal(rows[1][10],'');assert.equal(rows[1][12],'Google検索、Instagram');assert.equal(rows[1][13],"'=1+1");assert.equal(rows[1][4],'001234');assert.equal(rows[1][25],'問合せ');assert.equal(mails.length,2);assert(mails.every(m=>m.body.includes(result.id)));assert.equal(mails[1].to,'ccj.osaka@gmail.com');assert.equal(mails[1].replyTo,p.email);
 const invalid=[{tel:''},{tel:'   '},{tel:undefined},{privacyAgree:false},{childAge:''},{childAge:'-1'},{classType:'bad'},{firstTouch:'__proto__'},{email:'wrong'},{name:'\n'},{preContact:['bad']},{message:'a'.repeat(3001)},{submittedAt:'bad'},{deviceType:'bad'},{dojo:'bad'}];
 for(const edit of invalid){assert.equal(post({...p,...edit}).result,'error');assert.equal(rows.length,2);assert(!locked);}
@@ -29,6 +29,10 @@ assert.equal(context.doPost({postData:{contents:'{"formType":"enrollment"}'}}).r
 result=post({...p,classType:'adult',firstTouch:'other',firstTouchOther:'補足'});assert.equal(result.id,'INQ-20260913-002');assert.equal(rows[2][8],'');assert.equal(rows[2][10],'補足');assert.equal(rows[2][11],'');
 // 中間行削除時に現存IDと衝突しない。初期行容量を超える追記も確認。
 rows.splice(1,1);result=post(p);assert.equal(result.id,'INQ-20260913-003');result=post(p);assert.equal(result.id,'INQ-20260913-004');assert.equal(maxRows,4);
-const before=rows.length;rows[0][0]='変更されたヘッダー';assert.equal(post(p).result,'error');assert.equal(rows.length,before);assert(!locked);rows[0][0]='ID';
-failMail='お問い合わせを受け付けました';let mailCount=mails.length;result=post(p);assert.equal(result.result,'error');assert(result.message.includes('台帳保存済み'));assert.equal(rows.length,before+1);assert.equal(mails.length,mailCount+2);assert(!locked);
-console.log('GAS検証合格: 初期32列・日本語対応・採番・削除後衝突回避・ロック・不正入力・数式無害化・条件欄・ヘッダー不一致・メール片側失敗時の保存維持');
+const before=rows.length;rows[0][0]='変更されたヘッダー';let mailCount=mails.length;result=post(p);assert.equal(result.result,'success');assert.equal(rows.length,before+1);assert.equal(rows[before][2],p.name);assert.equal(rows[0][0],'変更されたヘッダー');assert.equal(mails.length,mailCount+3);assert(mails.at(-1).body.includes('ヘッダーが変わっています'));assert(mails.at(-1).body.includes(result.id));assert(!locked);rows[0][0]='ID';
+// 33列目以降の運用列を保持し、不要な警告を出さない。
+columns=33;rows[0][32]='追加列';rows[1][32]='保持';mailCount=mails.length;assert.equal(post(p).result,'success');assert.equal(mails.length,mailCount+2);assert.equal(rows[1][32],'保持');
+failMail='お問い合わせを受け付けました';mailCount=mails.length;let rowCount=rows.length;result=post(p);assert.equal(result.result,'error');assert(result.message.includes('台帳保存済み'));assert.equal(rows.length,rowCount+1);assert.equal(mails.length,mailCount+3);assert.equal(mails.at(-1).subject,'【問い合わせ処理エラー】');assert(!locked);
+// エラー通知も失敗する場合は再帰しない。
+failMail='【問い合わせ処理エラー】';mailCount=mails.length;rowCount=rows.length;result=post({...p,tel:''});assert.equal(result.result,'error');assert.equal(mails.length,mailCount+1);assert.equal(rows.length,rowCount);
+console.log('GAS検証合格: 32列固定保存・追加列保持・ヘッダー警告・処理エラー通知・通知失敗時の非再帰・電話必須・採番・保存維持');

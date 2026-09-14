@@ -27,9 +27,10 @@ function doGet() {
   return json_({result:configured ? 'ready' : 'setup_required',message:'CCJ 問い合わせAPI'});
 }
 function doPost(e) {
+  var raw;
   try {
     if (!e || !e.postData || e.postData.contents.length > 40000) throw new Error('送信データが不正です。');
-    var raw = JSON.parse(e.postData.contents);
+    raw = JSON.parse(e.postData.contents);
     if (!raw || raw.formType !== 'inquiry') throw new Error('対応していないフォームです。');
     var id = PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID');
     if (!id) throw new Error('setupInquiry を実行してください。');
@@ -37,9 +38,20 @@ function doPost(e) {
     var inquiryId = handleInquiry_(ss, raw);
     return json_({result:'success',id:inquiryId});
   } catch (error) {
-    // ペイロード・氏名・アドレスを実行ログへ出さない。
-    console.log('問い合わせ処理エラー: ' + error.message);
+    notifyIssue_(error.message, raw);
     return json_({result:'error',message:error.message});
+  }
+}
+// 通知には手動返信に必要な項目だけ含める。未検証の入力でも通知処理を止めない。
+function notifyIssue_(message, raw) {
+  var p = raw && raw.payload && typeof raw.payload === 'object' ? raw.payload : {};
+  function field(key) { return typeof p[key] === 'string' ? p[key].replace(/[\r\n\x00-\x1f]/g,' ').trim().slice(0,300) : '（取得できませんでした）'; }
+  try {
+    MailApp.sendEmail({to:OWNER_EMAIL_OVERRIDE_,subject:'【問い合わせ処理エラー】',name:'CCJ問い合わせフォーム',
+      body:'処理内容: ' + String(message).slice(0,2000) + '\n\n受信した連絡先（未検証の入力）\n氏名: ' + field('name') + '\nメール: ' + field('email') + '\n電話: ' + field('tel') + '\n希望教室: ' + field('dojo') + '\n\n台帳を確認し、保存されていない場合は上記連絡先へ手動で対応してください。'});
+  } catch (_) {
+    // 連絡先やペイロードをログへ出さない。通知失敗を再帰的に通知しない。
+    console.log('問い合わせ処理エラー通知の送信に失敗: ' + String(message).slice(0,2000));
   }
 }
 function json_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
@@ -79,15 +91,15 @@ function validate_(raw) {
 }
 function ensureHeaders_(sheet) {
   if (sheet.getLastRow() === 0) { sheet.getRange(1,1,1,HEADERS_.length).setValues([HEADERS_]); return; }
-  var actual = sheet.getRange(1,1,1,Math.max(sheet.getLastColumn(),HEADERS_.length)).getValues()[0];
-  if (actual.length !== HEADERS_.length || HEADERS_.some(function(v,i) {return actual[i] !== v;})) throw new Error('台帳のヘッダーが仕様と異なります。列の順番と名前を戻してください。');
+  var actual = sheet.getRange(1,1,1,HEADERS_.length).getValues()[0];
+  return HEADERS_.some(function(v,i) {return actual[i] !== v;});
 }
-function ensureSheet_(ss) {
+function ensureSheet_(ss, warnings) {
   var sheet = ss.getSheetByName('リード台帳');
   var fresh = !sheet || sheet.getLastRow() === 0;
   if (!sheet) sheet = ss.insertSheet('リード台帳');
   if (sheet.getMaxColumns() < HEADERS_.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), HEADERS_.length - sheet.getMaxColumns());
-  ensureHeaders_(sheet);
+  if (ensureHeaders_(sheet) && warnings) warnings.push('ヘッダーが変わっています。列名に関係なく指定の1〜32列の位置へ保存しました。列順を確認し、1行目の名前を元に戻してください。列の追加は33列目以降にしてください。');
   if (fresh) {
     if (sheet.getMaxRows() < 2) sheet.insertRowsAfter(1,1);
     sheet.setFrozenRows(1);
@@ -101,11 +113,11 @@ function statusRule_() { return SpreadsheetApp.newDataValidation().requireValueI
 // 自由入力を数式として実行させない。先頭ゼロの電話番号も文字列で保持する。
 function sheetText_(value) { return typeof value === 'string' && /^[=+\-@\t\r\n]/.test(value) ? "'" + value : value; }
 function handleInquiry_(ss, raw) {
-  var p = validate_(raw), id;
+  var p = validate_(raw), id, warnings = [];
   // 同時送信による同日IDの重複を避けるため、採番から書込みまでロックする。
   var lock = LockService.getScriptLock(); lock.waitLock(30000);
   try {
-    var sheet = ensureSheet_(ss);
+    var sheet = ensureSheet_(ss, warnings);
     var prefix = 'INQ-' + Utilities.formatDate(new Date(),'Asia/Tokyo','yyyyMMdd') + '-';
     var ids = sheet.getLastRow() > 1 ? sheet.getRange(2,1,sheet.getLastRow()-1,1).getValues().map(function(row){return String(row[0]);}) : [];
     var today = ids.filter(function(value) {return value.indexOf(prefix) === 0;});
@@ -139,6 +151,7 @@ function handleInquiry_(ss, raw) {
     MailApp.sendEmail({to:OWNER_EMAIL_OVERRIDE_,subject:'【新規問い合わせ】' + p.classLabel + '/' + p.dojo + '/' + p.requestLabel + ' ' + p.name,replyTo:p.email,name:'CCJ問い合わせフォーム',
       body:summary + '\n受付日時: ' + Utilities.formatDate(new Date(p.submittedAt),'Asia/Tokyo','yyyy/MM/dd HH:mm:ss') + '\nメール: ' + p.email + '\n電話: ' + p.tel + '\n子の年齢: ' + p.childAge + '\n最初の接点: ' + p.firstTouchLabel + '\nその他: ' + p.firstTouchOther + '\n紹介者: ' + p.referrerName + '\n直前に見たもの: ' + p.preContact + '\n検索語: ' + p.searchWords + '\nメッセージ: ' + p.message + '\n\n' + ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','firstLandingPage','firstReferrer','currentReferrer','submitPage','deviceType'].map(function(key){return key + ': ' + p[key];}).join('\n') + '\n\n台帳: ' + ss.getUrl()});
   } catch (_) { mailErrors.push('管理通知'); }
+  if (warnings.length) notifyIssue_('台帳保存済み (' + id + ')。' + warnings.join(' '), raw);
   if (mailErrors.length) throw new Error('台帳保存済み (' + id + ')。メール失敗: ' + mailErrors.join('・') + '。再送信せず台帳を確認してください。');
   console.log('問い合わせ保存・通知完了: ' + id);
   return id;
