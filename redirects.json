@@ -9,10 +9,10 @@
       "utm_campaign": "profile"
     },
     "ig-ad": {
-      "to": "form",
+      "to": "base",
       "utm_source": "instagram",
       "utm_medium": "paid",
-      "utm_campaign": "ad2026-10"
+      "utm_campaign": "ad2026-09"
     },
     "gbp-minoh": {
       "to": "form",
