@@ -7,5 +7,5 @@ if(!state.scriptId)throw new Error('GASの作成済みIDがありません。Cod
 fs.mkdirSync(dir,{recursive:true});
 fs.writeFileSync(path.join(dir,'.clasp.json'),JSON.stringify({scriptId:state.scriptId,parentId:state.spreadsheetId,rootDir:''},null,2)+'\n');
 fs.copyFileSync(path.join(root,'google-apps-script.js'),path.join(dir,'Code.js'));
-fs.writeFileSync(path.join(dir,'appsscript.json'),JSON.stringify({timeZone:'Asia/Tokyo',dependencies:{},exceptionLogging:'STACKDRIVER',runtimeVersion:'V8',oauthScopes:['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/script.send_mail'],webapp:{access:'ANYONE_ANONYMOUS',executeAs:'USER_DEPLOYING'}},null,2)+'\n');
+fs.writeFileSync(path.join(dir,'appsscript.json'),JSON.stringify({timeZone:'Asia/Tokyo',dependencies:{},exceptionLogging:'STACKDRIVER',runtimeVersion:'V8',oauthScopes:['https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/script.send_mail','https://www.googleapis.com/auth/gmail.readonly','https://www.googleapis.com/auth/script.scriptapp'],webapp:{access:'ANYONE_ANONYMOUS',executeAs:'USER_DEPLOYING'}},null,2)+'\n');
 console.log('問い合わせ専用GASの更新ファイルを準備しました。');

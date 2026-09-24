@@ -156,3 +156,153 @@ function handleInquiry_(ss, raw) {
   console.log('問い合わせ保存・通知完了: ' + id);
   return id;
 }
+
+// ============================================================
+// 台帳の自動記入（証拠ベース）— 2026-09-24 追加
+// 毎朝トリガーで実行。空欄のセルだけを埋め、既存の値は上書きしない。
+//   入会日: 入会申込シート（メールアドレス一致）の「入会申込日」
+//   体験日: 送信済みメール「◯月◯日 …体験のお礼」の件名の日付（無ければ送信日の前日）
+// 根拠は「自動更新ログ」シートに残す。変更があった日は管理者へ要約メール。
+// ============================================================
+var LEDGER_COL_ = {name:3, email:4, dojo:7, status:26, trialDate:27, joinDate:28, memo:32, received:2};
+var AUTO_LOG_SHEET_ = '自動更新ログ';
+var ENROLL_SHEET_NAME_ = '入会';
+
+// 初回に1回だけ手動実行: 入会申込シートのIDを保存する（URLの /d/ と /edit の間の文字列）
+function setEnrollmentSpreadsheetId(id) {
+  if (!id) throw new Error('setEnrollmentSpreadsheetId("スプレッドシートID") の形で実行してください。');
+  PropertiesService.getScriptProperties().setProperty('ENROLLMENT_SPREADSHEET_ID', String(id).trim());
+  SpreadsheetApp.openById(String(id).trim()).getSheetByName(ENROLL_SHEET_NAME_); // 権限とシート名の確認
+  console.log('入会申込シートIDを保存しました。');
+}
+// 初回に1回だけ手動実行: 毎朝7時台に自動実行するトリガーを登録（重複登録しない）
+function installLedgerAutoSyncTrigger() {
+  var exists = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'syncLedgerEvidence'; });
+  if (exists) { console.log('トリガーは登録済みです。'); return; }
+  ScriptApp.newTrigger('syncLedgerEvidence').timeBased().everyDays(1).atHour(7).inTimezone('Asia/Tokyo').create();
+  console.log('毎朝7時台の自動記入トリガーを登録しました。');
+}
+// 書き込まずに「何が埋まるか」だけログに出す（初回確認用）
+function syncLedgerEvidenceDryRun() { syncLedgerEvidence_(true); }
+// 本番（トリガーから呼ばれる）
+function syncLedgerEvidence() { syncLedgerEvidence_(false); }
+
+function syncLedgerEvidence_(dryRun) {
+  var ledgerId = PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID');
+  var enrollId = PropertiesService.getScriptProperties().getProperty('ENROLLMENT_SPREADSHEET_ID');
+  if (!ledgerId) throw new Error('setupInquiry が未実行です。');
+  var ss = SpreadsheetApp.openById(ledgerId);
+  var sheet = ss.getSheetByName('リード台帳');
+  if (!sheet || sheet.getLastRow() < 2) { console.log('台帳に行がありません。'); return; }
+  var enrollIndex = enrollId ? buildEnrollmentIndex_(enrollId) : null;
+  if (!enrollId) console.log('ENROLLMENT_SPREADSHEET_ID 未設定のため入会日は照合しません。');
+
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  var changes = [];
+  try {
+    var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, HEADERS_.length).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], rowNo = i + 2;
+      var id = String(r[0] || ''), email = String(r[LEDGER_COL_.email - 1] || '').trim().toLowerCase();
+      var memo = String(r[LEDGER_COL_.memo - 1] || ''), status = String(r[LEDGER_COL_.status - 1] || '');
+      if (!id || !email || /集計対象外|動作確認/.test(memo)) continue;
+      if (status === '見送り' || status === '連絡途絶') continue;
+      var received = r[LEDGER_COL_.received - 1] instanceof Date ? r[LEDGER_COL_.received - 1] : null;
+      var hasTrial = !!r[LEDGER_COL_.trialDate - 1], hasJoin = !!r[LEDGER_COL_.joinDate - 1];
+
+      // 体験日
+      if (!hasTrial) {
+        var trial = findTrialThankYou_(email, received);
+        if (trial) {
+          changes.push({row:rowNo, id:id, col:LEDGER_COL_.trialDate, label:'体験日', value:trial.date, evidence:'送信メール ' + trial.subject + ' (' + trial.msgId + ')'});
+          if (status === '問合せ' || status === '日程調整中' || status === '') changes.push({row:rowNo, id:id, col:LEDGER_COL_.status, label:'ステータス', value:'体験済', evidence:'体験日の自動記入に伴う'});
+          status = (status === '問合せ' || status === '日程調整中' || status === '') ? '体験済' : status;
+        }
+      }
+      // 入会日
+      if (!hasJoin && enrollIndex && enrollIndex[email]) {
+        var e = enrollIndex[email];
+        if (received && e.date.getTime() < received.getTime() - 86400000) {
+          console.log(id + ': 入会申込日が問い合わせより前のため除外（既存会員の可能性）');
+        } else {
+          changes.push({row:rowNo, id:id, col:LEDGER_COL_.joinDate, label:'入会日', value:e.date, evidence:'入会申込シート ' + e.rowNo + '行目 (' + e.course + ')'});
+          if (status !== '入会') changes.push({row:rowNo, id:id, col:LEDGER_COL_.status, label:'ステータス', value:'入会', evidence:'入会日の自動記入に伴う'});
+        }
+      }
+    }
+    if (!dryRun) {
+      changes.forEach(function(c) {
+        var cell = sheet.getRange(c.row, c.col);
+        if (cell.getValue()) return; // 実行中に人が入れていたら触らない
+        if (c.value instanceof Date) cell.setNumberFormat('yyyy/mm/dd');
+        cell.setValue(c.value);
+      });
+      SpreadsheetApp.flush();
+    }
+  } finally { lock.releaseLock(); }
+  writeAutoLog_(ss, changes, dryRun);
+  if (changes.length && !dryRun) notifyAutoSync_(ss, changes);
+  console.log((dryRun ? '[DRY RUN] ' : '') + changes.length + ' 件' + (dryRun ? 'が対象' : 'を記入') + 'しました。');
+}
+
+function buildEnrollmentIndex_(enrollId) {
+  var sh = SpreadsheetApp.openById(enrollId).getSheetByName(ENROLL_SHEET_NAME_);
+  if (!sh || sh.getLastRow() < 2) return {};
+  var values = sh.getDataRange().getValues(), head = values[0].map(String);
+  var cDate = head.indexOf('入会申込日'), cMail = head.indexOf('メールアドレス'), cMail2 = head.indexOf('予備メールアドレス'), cCourse = head.indexOf('コース');
+  if (cDate < 0 || cMail < 0) throw new Error('入会申込シートに「入会申込日」「メールアドレス」列が見つかりません。');
+  var index = {};
+  for (var i = 1; i < values.length; i++) {
+    var d = toDate_(values[i][cDate]); if (!d) continue;
+    [values[i][cMail], cMail2 >= 0 ? values[i][cMail2] : ''].forEach(function(m) {
+      m = String(m || '').trim().toLowerCase(); if (!m) return;
+      if (!index[m] || index[m].date.getTime() < d.getTime()) index[m] = {date:d, rowNo:i + 1, course:String(cCourse >= 0 ? values[i][cCourse] : '')};
+    });
+  }
+  return index;
+}
+
+// 「M月D日 ◯◯クラス体験のお礼（CCJカポエイラ）」を自分が送っていれば、その日付を返す
+function findTrialThankYou_(email, received) {
+  var q = 'in:sent to:' + email + ' subject:(体験 お礼)';
+  if (received) q += ' after:' + Utilities.formatDate(new Date(received.getTime() - 7 * 86400000), 'Asia/Tokyo', 'yyyy/MM/dd');
+  var threads = GmailApp.search(q, 0, 5);
+  var best = null;
+  threads.forEach(function(t) {
+    t.getMessages().forEach(function(m) {
+      if (!/体験/.test(m.getSubject()) || !/お礼|ありがとう/.test(m.getSubject() + ' ' + m.getPlainBody().slice(0, 400))) return;
+      if (m.getTo().toLowerCase().indexOf(email) < 0) return;
+      var sent = m.getDate(), d = dateFromSubject_(m.getSubject(), sent) || new Date(sent.getFullYear(), sent.getMonth(), sent.getDate() - 1);
+      if (!best || d.getTime() < best.date.getTime()) best = {date:d, subject:m.getSubject(), msgId:m.getId()};
+    });
+  });
+  return best;
+}
+function dateFromSubject_(subject, sent) {
+  var m = subject.match(/(\d{1,2})月(\d{1,2})日/); if (!m) return null;
+  var y = sent.getFullYear(), month = Number(m[1]) - 1, day = Number(m[2]);
+  if (month > sent.getMonth() + 1) y -= 1; // 年明け直後に12月の体験を礼状する場合
+  var d = new Date(y, month, day); return isNaN(d.getTime()) ? null : d;
+}
+function toDate_(v) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  var s = String(v || '').trim(); if (!s) return null;
+  var m = s.match(/(\d{4})[\/\-年](\d{1,2})[\/\-月](\d{1,2})/); if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  var d = new Date(s); return isNaN(d.getTime()) ? null : d;
+}
+function writeAutoLog_(ss, changes, dryRun) {
+  var sh = ss.getSheetByName(AUTO_LOG_SHEET_) || ss.insertSheet(AUTO_LOG_SHEET_);
+  if (sh.getLastRow() === 0) { sh.appendRow(['実行日時', '区分', 'ID', '行', '項目', '値', '根拠']); sh.setFrozenRows(1); }
+  var now = new Date();
+  if (!changes.length) { sh.appendRow([now, dryRun ? 'DRY' : '実行', '', '', '変更なし', '', '']); return; }
+  sh.getRange(sh.getLastRow() + 1, 1, changes.length, 7).setValues(changes.map(function(c) {
+    return [now, dryRun ? 'DRY' : '実行', c.id, c.row, c.label, c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : String(c.value), c.evidence];
+  }));
+}
+function notifyAutoSync_(ss, changes) {
+  var lines = changes.map(function(c) { return c.id + ' ' + c.label + ' → ' + (c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : c.value) + '  [' + c.evidence + ']'; });
+  try {
+    MailApp.sendEmail({to:OWNER_EMAIL_OVERRIDE_, subject:'【台帳 自動記入】' + changes.length + '件', name:'CCJ問い合わせフォーム',
+      body:'リード台帳に次を自動記入しました。間違いがあれば台帳を直接修正してください（自動処理は空欄のみ埋め、上書きしません）。\n\n' + lines.join('\n') + '\n\n台帳: ' + ss.getUrl() + '\nログ: シート「' + AUTO_LOG_SHEET_ + '」'});
+  } catch (e) { console.log('要約メール送信失敗: ' + e.message); }
+}
