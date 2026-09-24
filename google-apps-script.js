@@ -31,6 +31,7 @@ function doPost(e) {
   try {
     if (!e || !e.postData || e.postData.contents.length > 40000) throw new Error('送信データが不正です。');
     raw = JSON.parse(e.postData.contents);
+    if (raw && raw.formType === 'ledger_update') return json_(handleLedgerUpdate_(raw));
     if (!raw || raw.formType !== 'inquiry') throw new Error('対応していないフォームです。');
     var id = PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID');
     if (!id) throw new Error('setupInquiry を実行してください。');
@@ -177,9 +178,9 @@ function setEnrollmentSpreadsheetId(id) {
 }
 // 初回に1回だけ手動実行: 毎朝7時台に自動実行するトリガーを登録（重複登録しない）
 function installLedgerAutoSyncTrigger() {
-  var exists = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'syncLedgerEvidence'; });
+  var exists = ScriptApp.getProjectTriggers().some(function(t){ return t.getHandlerFunction() === 'dailyLedgerSync'; });
   if (exists) { console.log('トリガーは登録済みです。'); return; }
-  ScriptApp.newTrigger('syncLedgerEvidence').timeBased().everyDays(1).atHour(7).inTimezone('Asia/Tokyo').create();
+  ScriptApp.newTrigger('dailyLedgerSync').timeBased().everyDays(1).atHour(7).inTimezone('Asia/Tokyo').create();
   console.log('毎朝7時台の自動記入トリガーを登録しました。');
 }
 // 書き込まずに「何が埋まるか」だけログに出す（初回確認用）
@@ -306,3 +307,140 @@ function notifyAutoSync_(ss, changes) {
       body:'リード台帳に次を自動記入しました。間違いがあれば台帳を直接修正してください（自動処理は空欄のみ埋め、上書きしません）。\n\n' + lines.join('\n') + '\n\n台帳: ' + ss.getUrl() + '\nログ: シート「' + AUTO_LOG_SHEET_ + '」'});
   } catch (e) { console.log('要約メール送信失敗: ' + e.message); }
 }
+
+// ============================================================
+// 見送りの自動化 — 2026-09-25 追加
+//  (1) 30日間動きがない行 → ステータス「見送り」・理由「連絡途絶」
+//  (2) 本人から辞退メール → 「見送り」・理由をメール本文から推定
+//  (3) 外部（Claude Code / Cursor）からの更新API: formType 'ledger_update' + トークン
+// いずれも進行中の行のみ対象。ログと要約メールは既存の仕組みに乗せる。
+// ============================================================
+var LEDGER_COL_REASON_ = 30, LEDGER_COL_JOIN_REASON_ = 29;
+var STALE_DAYS_ = 30;
+var DECLINE_RE_ = /(今回は|今回の?ところは|申し訳|残念).{0,20}(見送|辞退|遠慮|やめ|断り|見合わ)|見送らせて|辞退させて|遠慮させて|お断り|入会(は|を)?(しない|いたしません|やめ)|検討の結果/;
+var REASON_RULES_ = [
+  [/時間|曜日|スケジュール|都合が(合|つ)/, '時間が合わない'],
+  [/遠い|場所|通(う|い)の|距離|アクセス/, '場所が遠い'],
+  [/料金|月謝|費用|金額|高い/, '料金'],
+  [/興味|嫌が|乗り気|楽しめ|合わな(かっ|い)/, '子どもが興味を示さなかった'],
+  [/他の(習い事|教室)|別の(習い事|教室)|サッカー|スイミング|ダンス/, '他の習い事'],
+  [/保留|また改めて|落ち着いたら|時期を?(見て|改めて)/, '保留']
+];
+var DECLINE_REASONS_ = ['時間が合わない','場所が遠い','料金','子どもが興味を示さなかった','他の習い事','保留','連絡途絶','その他'];
+
+function syncDeclines() { syncDeclines_(false); }
+function syncDeclinesDryRun() { syncDeclines_(true); }
+function syncDeclines_(dryRun) {
+  var ledgerId = PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID');
+  var ss = SpreadsheetApp.openById(ledgerId), sheet = ss.getSheetByName('リード台帳');
+  if (!sheet || sheet.getLastRow() < 2) return;
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  var changes = [], now = new Date();
+  try {
+    var rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, HEADERS_.length).getValues();
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], rowNo = i + 2, id = String(r[0] || ''), email = String(r[LEDGER_COL_.email - 1] || '').trim().toLowerCase();
+      var status = String(r[LEDGER_COL_.status - 1] || ''), memo = String(r[LEDGER_COL_.memo - 1] || '');
+      if (!id || !email || /集計対象外|動作確認/.test(memo)) continue;
+      if (status === '入会' || status === '見送り' || status === '連絡途絶') continue;
+      var received = r[LEDGER_COL_.received - 1] instanceof Date ? r[LEDGER_COL_.received - 1] : null;
+      var trial = r[LEDGER_COL_.trialDate - 1] instanceof Date ? r[LEDGER_COL_.trialDate - 1] : null;
+      var mail = lastMailActivity_(email, received);
+      // (2) 本人の辞退メール
+      if (mail && mail.decline) {
+        changes.push({row:rowNo, id:id, col:LEDGER_COL_.status, label:'ステータス', value:'見送り', evidence:'本人メール ' + mail.decline.subject + ' (' + mail.decline.msgId + ')'});
+        changes.push({row:rowNo, id:id, col:LEDGER_COL_REASON_, label:'見送り理由', value:mail.decline.reason, evidence:'本文から推定: 「' + mail.decline.quote + '」'});
+        continue;
+      }
+      // (1) 30日更新なし
+      var last = [received, trial, mail && mail.latest].filter(Boolean).reduce(function(a, b) { return a.getTime() > b.getTime() ? a : b; }, new Date(0));
+      if ((now.getTime() - last.getTime()) / 86400000 >= STALE_DAYS_) {
+        changes.push({row:rowNo, id:id, col:LEDGER_COL_.status, label:'ステータス', value:'見送り', evidence:'最終更新 ' + Utilities.formatDate(last, 'Asia/Tokyo', 'yyyy/MM/dd') + ' から' + STALE_DAYS_ + '日以上動きなし'});
+        changes.push({row:rowNo, id:id, col:LEDGER_COL_REASON_, label:'見送り理由', value:'連絡途絶', evidence:'自動判定'});
+      }
+    }
+    if (!dryRun) {
+      changes.forEach(function(c) {
+        var cell = sheet.getRange(c.row, c.col);
+        if (c.col === LEDGER_COL_REASON_ && cell.getValue()) return;
+        cell.setValue(c.value);
+      });
+      SpreadsheetApp.flush();
+    }
+  } finally { lock.releaseLock(); }
+  writeAutoLog_(ss, changes, dryRun);
+  if (changes.length && !dryRun) notifyAutoSync_(ss, changes);
+  console.log((dryRun ? '[DRY RUN] ' : '') + '見送り判定 ' + changes.length + ' 件');
+}
+// その相手との最終やり取り日と、本人からの辞退メールがあればその内容
+function lastMailActivity_(email, received) {
+  var q = '(from:' + email + ' OR to:' + email + ')';
+  if (received) q += ' after:' + Utilities.formatDate(new Date(received.getTime() - 7 * 86400000), 'Asia/Tokyo', 'yyyy/MM/dd');
+  var threads = GmailApp.search(q, 0, 10), latest = null, decline = null;
+  threads.forEach(function(t) {
+    t.getMessages().forEach(function(m) {
+      var d = m.getDate(); if (!latest || d.getTime() > latest.getTime()) latest = d;
+      if (m.getFrom().toLowerCase().indexOf(email) < 0) return; // 本人からのみ
+      var body = stripQuoted_(m.getPlainBody()), hit = body.match(DECLINE_RE_);
+      if (!hit) return;
+      if (!decline || d.getTime() > decline.date.getTime()) {
+        var reason = 'その他';
+        for (var k = 0; k < REASON_RULES_.length; k++) if (REASON_RULES_[k][0].test(body)) { reason = REASON_RULES_[k][1]; break; }
+        var at = Math.max(0, hit.index - 30);
+        decline = {date:d, subject:m.getSubject(), msgId:m.getId(), reason:reason, quote:body.slice(at, hit.index + hit[0].length + 20).replace(/\s+/g, ' ')};
+      }
+    });
+  });
+  return latest ? {latest:latest, decline:decline} : null;
+}
+function stripQuoted_(text) {
+  return String(text || '').split('\n').filter(function(l) { return !/^\s*>/.test(l); }).join('\n')
+    .split(/\n.{0,40}(wrote|さんは書きました|On .+ at .+):?\s*\n/i)[0].slice(0, 3000);
+}
+
+// (3) 外部からの更新API。Claude Code / Cursor が「◯◯さんは見送り」を書き込むために使う。
+// POST {formType:'ledger_update', token, id? | email? | name?, status?, reason?, joinReason?, trialDate?, joinDate?, memo?, by?}
+// status / reason / memo は上書き可。体験日・入会日は空欄のみ。
+function handleLedgerUpdate_(raw) {
+  var token = PropertiesService.getScriptProperties().getProperty('LEDGER_UPDATE_TOKEN');
+  if (!token || raw.token !== token) return {result:'error', message:'認証に失敗しました。'};
+  var ss = SpreadsheetApp.openById(PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID'));
+  var sheet = ss.getSheetByName('リード台帳');
+  var rows = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 1), HEADERS_.length).getValues();
+  var key = {id:String(raw.id || '').trim(), email:String(raw.email || '').trim().toLowerCase(), name:String(raw.name || '').replace(/\s/g, '')};
+  var hits = [];
+  rows.forEach(function(r, i) {
+    if (!r[0]) return;
+    if (key.id && String(r[0]) === key.id) hits.push(i);
+    else if (!key.id && key.email && String(r[LEDGER_COL_.email - 1]).trim().toLowerCase() === key.email) hits.push(i);
+    else if (!key.id && !key.email && key.name && String(r[LEDGER_COL_.name - 1]).replace(/\s/g, '').indexOf(key.name) >= 0) hits.push(i);
+  });
+  if (hits.length !== 1) return {result:'error', message:'該当行が ' + hits.length + ' 件です。ID か メールで指定してください。', candidates:hits.map(function(i) { return {id:rows[i][0], name:rows[i][LEDGER_COL_.name - 1], dojo:rows[i][LEDGER_COL_.dojo - 1]}; })};
+  var rowNo = hits[0] + 2, changes = [], id = String(rows[hits[0]][0]);
+  function put(col, label, value, onlyIfEmpty) {
+    if (value === undefined || value === null || value === '') return;
+    var cell = sheet.getRange(rowNo, col);
+    if (onlyIfEmpty && cell.getValue()) { changes.push({row:rowNo, id:id, col:col, label:label, value:'(既存値あり・未変更)', evidence:'API'}); return; }
+    if (value instanceof Date) cell.setNumberFormat('yyyy/mm/dd');
+    cell.setValue(value); changes.push({row:rowNo, id:id, col:col, label:label, value:value, evidence:'API ' + String(raw.by || '')});
+  }
+  if (raw.status && STATUSES_.indexOf(raw.status) < 0) return {result:'error', message:'ステータスは ' + STATUSES_.join('/') + ' のいずれか'};
+  if (raw.reason && DECLINE_REASONS_.indexOf(raw.reason) < 0) return {result:'error', message:'見送り理由は ' + DECLINE_REASONS_.join('/') + ' のいずれか'};
+  put(LEDGER_COL_.status, 'ステータス', raw.status);
+  put(LEDGER_COL_REASON_, '見送り理由', raw.reason);
+  put(LEDGER_COL_JOIN_REASON_, '入会理由', raw.joinReason);
+  put(LEDGER_COL_.trialDate, '体験日', toDate_(raw.trialDate), true);
+  put(LEDGER_COL_.joinDate, '入会日', toDate_(raw.joinDate), true);
+  if (raw.memo) { var cur = String(sheet.getRange(rowNo, LEDGER_COL_.memo).getValue() || ''); put(LEDGER_COL_.memo, 'メモ', (cur ? cur + '\n' : '') + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd') + ' ' + raw.memo); }
+  SpreadsheetApp.flush();
+  writeAutoLog_(ss, changes, false);
+  return {result:'success', id:id, changes:changes.map(function(c) { return c.label + '=' + (c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : c.value); })};
+}
+// 初回に1回だけ手動実行: 更新APIの合言葉を発行してログに表示する（Mac 側の .env に控える。Git に書かない）
+function issueLedgerUpdateToken() {
+  var t = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  PropertiesService.getScriptProperties().setProperty('LEDGER_UPDATE_TOKEN', t);
+  console.log('LEDGER_UPDATE_TOKEN=' + t);
+}
+// トリガー用: 証拠の自動記入 → 見送り判定 を1回にまとめる
+function dailyLedgerSync() { syncLedgerEvidence(); syncDeclines(); }
