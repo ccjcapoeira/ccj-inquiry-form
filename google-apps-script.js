@@ -296,9 +296,9 @@ function writeAutoLog_(ss, changes, dryRun) {
   if (sh.getLastRow() === 0) { sh.appendRow(['実行日時', '区分', 'ID', '行', '項目', '値', '根拠']); sh.setFrozenRows(1); }
   var now = new Date();
   if (!changes.length) { sh.appendRow([now, dryRun ? 'DRY' : '実行', '', '', '変更なし', '', '']); return; }
-  sh.getRange(sh.getLastRow() + 1, 1, changes.length, 7).setValues(changes.map(function(c) {
-    return [now, dryRun ? 'DRY' : '実行', c.id, c.row, c.label, c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : String(c.value), c.evidence];
-  }));
+  changes.forEach(function(c) {
+    sh.appendRow([now, dryRun ? 'DRY' : '実行', c.id, c.row, c.label, c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : String(c.value), c.evidence]);
+  });
 }
 function notifyAutoSync_(ss, changes) {
   var lines = changes.map(function(c) { return c.id + ' ' + c.label + ' → ' + (c.value instanceof Date ? Utilities.formatDate(c.value, 'Asia/Tokyo', 'yyyy/MM/dd') : c.value) + '  [' + c.evidence + ']'; });
