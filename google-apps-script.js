@@ -143,9 +143,9 @@ function handleInquiry_(ss, raw) {
   // 保存後にメール送信。一方が失敗してももう一方は試し、同じ問い合わせを再追記しない。
   var mailErrors = [];
   var summary = '受付ID: ' + id + '\n氏名: ' + p.name + '\n希望クラス: ' + p.classLabel + '\n希望教室: ' + p.dojo + '\nご希望: ' + p.requestLabel;
-  var signature = '\n\nCCJ.CAPOEIRA OSAKA\n窪山\nccj.osaka@gmail.com\nTEL: 050-3636-3410';
+  var signature = '\n\nCCJ.CAPOEIRA OSAKA\n事務局\nccj.osaka@gmail.com\nTEL: 050-3636-3410';
   try {
-    MailApp.sendEmail({to:p.email,subject:'【CCJカポエイラ】お問い合わせを受け付けました',replyTo:OWNER_EMAIL_OVERRIDE_,name:'CCJカポエイラ',
+    MailApp.sendEmail({to:p.email,subject:'【CCJカポエイラ】お問い合わせを受け付けました',replyTo:OWNER_EMAIL_OVERRIDE_,name:'CCJカポエイラ事務局',
       body:p.name + ' 様\n\nお問い合わせありがとうございます。\n' + summary + '\n\n2営業日以内に担当者から返信します。体験日時は担当者との調整後に確定します。' + signature});
   } catch (_) { mailErrors.push('自動返信'); }
   try {
