@@ -32,6 +32,7 @@ function doPost(e) {
     if (!e || !e.postData || e.postData.contents.length > 40000) throw new Error('送信データが不正です。');
     raw = JSON.parse(e.postData.contents);
     if (raw && raw.formType === 'ledger_update') return json_(handleLedgerUpdate_(raw));
+    if (raw && raw.formType === 'ledger_admin') return json_(handleLedgerAdmin_(raw));
     if (!raw || raw.formType !== 'inquiry') throw new Error('対応していないフォームです。');
     var id = PropertiesService.getScriptProperties().getProperty('INQUIRY_SPREADSHEET_ID');
     if (!id) throw new Error('setupInquiry を実行してください。');
@@ -441,6 +442,48 @@ function issueLedgerUpdateToken() {
   var t = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
   PropertiesService.getScriptProperties().setProperty('LEDGER_UPDATE_TOKEN', t);
   console.log('LEDGER_UPDATE_TOKEN=' + t);
+}
+// ============================================================
+// 点検・集計API — 2026-11-20 追加。合言葉は ledger_update と共通。
+// POST {formType:'ledger_admin', token, action}
+//   status          トリガー・設定の有無、台帳の行（氏名・連絡先を除く）、自動更新ログの末尾
+//   run / dry_run   dailyLedgerSync 相当を実行し、各段のエラーを返す
+//   install_trigger 毎朝の dailyLedgerSync トリガーを登録（重複しない）
+// 氏名・メール・電話・メッセージは返さない。
+// ============================================================
+function handleLedgerAdmin_(raw) {
+  var props = PropertiesService.getScriptProperties();
+  var token = props.getProperty('LEDGER_UPDATE_TOKEN');
+  if (!token || raw.token !== token) return {result:'error', message:'認証に失敗しました。'};
+  var out = {result:'success', action:String(raw.action || 'status')};
+  if (out.action === 'install_trigger') installLedgerAutoSyncTrigger();
+  if (out.action === 'run' || out.action === 'dry_run') {
+    var dry = out.action === 'dry_run'; out.steps = [];
+    [['体験日・入会日', function() { syncLedgerEvidence_(dry); }], ['見送り', function() { syncDeclines_(dry); }]].forEach(function(s) {
+      try { s[1](); out.steps.push({step:s[0], ok:true}); } catch (e) { out.steps.push({step:s[0], ok:false, error:String(e && e.message || e).slice(0, 500)}); }
+    });
+  }
+  try {
+    out.triggers = ScriptApp.getProjectTriggers().map(function(t) { return {fn:t.getHandlerFunction(), type:String(t.getEventType())}; });
+  } catch (e) { out.triggersError = String(e.message).slice(0, 300); }
+  out.config = {ledger:!!props.getProperty('INQUIRY_SPREADSHEET_ID'), enrollment:!!props.getProperty('ENROLLMENT_SPREADSHEET_ID')};
+  var ss = SpreadsheetApp.openById(props.getProperty('INQUIRY_SPREADSHEET_ID')), sheet = ss.getSheetByName('リード台帳');
+  function d(v) { return v instanceof Date ? Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy-MM-dd') : String(v || ''); }
+  var n = Math.max(sheet.getLastRow() - 1, 0);
+  out.rows = (n ? sheet.getRange(2, 1, n, HEADERS_.length).getValues() : []).filter(function(r) { return r[0]; }).map(function(r) {
+    return {id:String(r[0]), received:d(r[1]), cls:String(r[5]), dojo:String(r[6]), type:String(r[7]), firstTouch:String(r[9]),
+      utm_source:String(r[15]), utm_medium:String(r[16]), utm_campaign:String(r[17]), status:String(r[25]), trial:d(r[26]), join:d(r[27]),
+      joinReason:String(r[28]), declineReason:String(r[29]), excluded:/集計対象外|動作確認/.test(String(r[31]))};
+  });
+  var log = ss.getSheetByName(AUTO_LOG_SHEET_);
+  if (log && log.getLastRow() > 1) {
+    var take = Math.min(log.getLastRow() - 1, Math.min(Number(raw.logRows) || 30, 200));
+    out.log = log.getRange(log.getLastRow() - take + 1, 1, take, 7).getValues().map(function(r) {
+      return [r[0] instanceof Date ? Utilities.formatDate(r[0], 'Asia/Tokyo', 'yyyy-MM-dd HH:mm') : String(r[0]), String(r[1]), String(r[2]), String(r[4]), String(r[5]), String(r[6]).replace(/[\w.+-]+@[\w.-]+/g, '(メール)').slice(0, 120)];
+    });
+    out.logTotal = log.getLastRow() - 1;
+  } else { out.log = []; out.logTotal = 0; }
+  return out;
 }
 // トリガー用: 証拠の自動記入 → 見送り判定 を1回にまとめる
 function dailyLedgerSync() { syncLedgerEvidence(); syncDeclines(); }
