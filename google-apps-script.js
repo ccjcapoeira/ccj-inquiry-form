@@ -222,8 +222,8 @@ function syncLedgerEvidence_(dryRun) {
         }
       }
       // 入会日
-      if (!hasJoin && enrollIndex && enrollIndex[email]) {
-        var e = enrollIndex[email];
+      if (!hasJoin && enrollIndex && pickEnrollment_(enrollIndex[email], received)) {
+        var e = pickEnrollment_(enrollIndex[email], received);
         if (received && e.date.getTime() < received.getTime() - 86400000) {
           console.log(id + ': 入会申込日が問い合わせより前のため除外（既存会員の可能性）');
         } else {
@@ -258,23 +258,35 @@ function buildEnrollmentIndex_(enrollId) {
     var d = toDate_(values[i][cDate]); if (!d) continue;
     [values[i][cMail], cMail2 >= 0 ? values[i][cMail2] : ''].forEach(function(m) {
       m = String(m || '').trim().toLowerCase(); if (!m) return;
-      if (!index[m] || index[m].date.getTime() < d.getTime()) index[m] = {date:d, rowNo:i + 1, course:String(cCourse >= 0 ? values[i][cCourse] : '')};
+      (index[m] = index[m] || []).push({date:d, rowNo:i + 1, course:String(cCourse >= 0 ? values[i][cCourse] : '')});
     });
   }
   return index;
 }
 
 // 「M月D日 ◯◯クラス体験のお礼（CCJカポエイラ）」を自分が送っていれば、その日付を返す
+// 同じメールで複数の申込（兄弟など）があるとき、問い合わせ以降で最も早い申込を本人のものとみなす
+function pickEnrollment_(list, received) {
+  if (!list || !list.length) return null;
+  var min = received ? received.getTime() - 86400000 : 0;
+  var ok = list.filter(function(e) { return e.date.getTime() >= min; }).sort(function(a, b) { return a.date.getTime() - b.date.getTime(); });
+  return ok[0] || null;
+}
 function findTrialThankYou_(email, received) {
-  var q = 'in:sent to:' + email + ' subject:(体験 お礼)';
+  var q = 'in:sent to:' + email;
   if (received) q += ' after:' + Utilities.formatDate(new Date(received.getTime() - 7 * 86400000), 'Asia/Tokyo', 'yyyy/MM/dd');
-  var threads = GmailApp.search(q, 0, 5);
+  var threads = GmailApp.search(q, 0, 10);
   var best = null;
   threads.forEach(function(t) {
     t.getMessages().forEach(function(m) {
-      if (!/体験/.test(m.getSubject()) || !/お礼/.test(m.getSubject())) return; // 案内メール本文の「ありがとう」を拾わない
       if (m.getTo().toLowerCase().indexOf(email) < 0) return;
-      var sent = m.getDate(), d = dateFromSubject_(m.getSubject(), sent) || new Date(sent.getFullYear(), sent.getMonth(), sent.getDate() - 1);
+      // お礼メールの形は2つ: 件名「M月D日 …体験のお礼」／返信スレッドで本文冒頭が「…お越しいただき、ありがとうございました」
+      // 案内メールの「お問い合わせありがとうございます」は拾わない
+      var subj = m.getSubject(), head = stripQuoted_(m.getPlainBody()).slice(0, 300).replace(/\s+/g, '');
+      var bySubject = /体験/.test(subj) && /お礼/.test(subj);
+      var byBody = /(お越し|ご参加|お連れ)[^。]{0,30}ありがとうございました/.test(head);
+      if (!bySubject && !byBody) return;
+      var sent = m.getDate(), d = (bySubject && dateFromSubject_(subj, sent)) || dateFromSubject_(head, sent) || new Date(sent.getFullYear(), sent.getMonth(), sent.getDate() - 1);
       if (!best || d.getTime() < best.date.getTime()) best = {date:d, subject:m.getSubject(), msgId:m.getId()};
     });
   });
