@@ -207,7 +207,7 @@ function syncLedgerEvidence_(dryRun) {
       var r = rows[i], rowNo = i + 2;
       var id = String(r[0] || ''), email = String(r[LEDGER_COL_.email - 1] || '').trim().toLowerCase();
       var memo = String(r[LEDGER_COL_.memo - 1] || ''), status = String(r[LEDGER_COL_.status - 1] || '');
-      if (!id || !email || /集計対象外|動作確認/.test(memo)) continue;
+      if (!id || !email || /集計対象外|動作確認|触らない/.test(memo)) continue;
       if (status === '見送り' || status === '連絡途絶') continue;
       var received = r[LEDGER_COL_.received - 1] instanceof Date ? r[LEDGER_COL_.received - 1] : null;
       var hasTrial = !!r[LEDGER_COL_.trialDate - 1], hasJoin = !!r[LEDGER_COL_.joinDate - 1];
@@ -272,7 +272,7 @@ function findTrialThankYou_(email, received) {
   var best = null;
   threads.forEach(function(t) {
     t.getMessages().forEach(function(m) {
-      if (!/体験/.test(m.getSubject()) || !/お礼|ありがとう/.test(m.getSubject() + ' ' + m.getPlainBody().slice(0, 400))) return;
+      if (!/体験/.test(m.getSubject()) || !/お礼/.test(m.getSubject())) return; // 案内メール本文の「ありがとう」を拾わない
       if (m.getTo().toLowerCase().indexOf(email) < 0) return;
       var sent = m.getDate(), d = dateFromSubject_(m.getSubject(), sent) || new Date(sent.getFullYear(), sent.getMonth(), sent.getDate() - 1);
       if (!best || d.getTime() < best.date.getTime()) best = {date:d, subject:m.getSubject(), msgId:m.getId()};
@@ -342,7 +342,7 @@ function syncDeclines_(dryRun) {
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i], rowNo = i + 2, id = String(r[0] || ''), email = String(r[LEDGER_COL_.email - 1] || '').trim().toLowerCase();
       var status = String(r[LEDGER_COL_.status - 1] || ''), memo = String(r[LEDGER_COL_.memo - 1] || '');
-      if (!id || !email || /集計対象外|動作確認/.test(memo)) continue;
+      if (!id || !email || /集計対象外|動作確認|触らない/.test(memo)) continue;
       if (status === '入会' || status === '見送り' || status === '連絡途絶') continue;
       var received = r[LEDGER_COL_.received - 1] instanceof Date ? r[LEDGER_COL_.received - 1] : null;
       var trial = r[LEDGER_COL_.trialDate - 1] instanceof Date ? r[LEDGER_COL_.trialDate - 1] : null;
@@ -430,8 +430,14 @@ function handleLedgerUpdate_(raw) {
   put(LEDGER_COL_.status, 'ステータス', raw.status);
   put(LEDGER_COL_REASON_, '見送り理由', raw.reason);
   put(LEDGER_COL_JOIN_REASON_, '入会理由', raw.joinReason);
-  put(LEDGER_COL_.trialDate, '体験日', toDate_(raw.trialDate), true);
-  put(LEDGER_COL_.joinDate, '入会日', toDate_(raw.joinDate), true);
+  var tomorrow = new Date(Date.now() + 86400000), td = toDate_(raw.trialDate), jd = toDate_(raw.joinDate);
+  if ((td && td > tomorrow) || (jd && jd > tomorrow)) return {result:'error', message:'体験日・入会日には実際にあった日だけを入れます。未来の日付（予定日）は入れられません。'};
+  (raw.clear || []).forEach(function(k) {
+    var col = {trialDate:LEDGER_COL_.trialDate, joinDate:LEDGER_COL_.joinDate}[k]; if (!col) return;
+    sheet.getRange(rowNo, col).clearContent(); changes.push({row:rowNo, id:id, col:col, label:k === 'trialDate' ? '体験日' : '入会日', value:'(消去)', evidence:'API ' + String(raw.by || '')});
+  });
+  put(LEDGER_COL_.trialDate, '体験日', td, raw.force !== true);
+  put(LEDGER_COL_.joinDate, '入会日', jd, raw.force !== true);
   if (raw.memo) { var cur = String(sheet.getRange(rowNo, LEDGER_COL_.memo).getValue() || ''); put(LEDGER_COL_.memo, 'メモ', (cur ? cur + '\n' : '') + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd') + ' ' + raw.memo); }
   SpreadsheetApp.flush();
   writeAutoLog_(ss, changes, false);
@@ -479,7 +485,7 @@ function handleLedgerAdmin_(raw) {
   if (log && log.getLastRow() > 1) {
     var take = Math.min(log.getLastRow() - 1, Math.min(Number(raw.logRows) || 30, 200));
     out.log = log.getRange(log.getLastRow() - take + 1, 1, take, 7).getValues().map(function(r) {
-      return [r[0] instanceof Date ? Utilities.formatDate(r[0], 'Asia/Tokyo', 'yyyy-MM-dd HH:mm') : String(r[0]), String(r[1]), String(r[2]), String(r[4]), String(r[5]), String(r[6]).replace(/[\w.+-]+@[\w.-]+/g, '(メール)').slice(0, 120)];
+      return [r[0] instanceof Date ? Utilities.formatDate(r[0], 'Asia/Tokyo', 'yyyy-MM-dd HH:mm') : String(r[0]), String(r[1]), String(r[2]), String(r[4]), d(r[5]), String(r[6]).replace(/[\w.+-]+@[\w.-]+/g, '(メール)').slice(0, 120)];
     });
     out.logTotal = log.getLastRow() - 1;
   } else { out.log = []; out.logTotal = 0; }
